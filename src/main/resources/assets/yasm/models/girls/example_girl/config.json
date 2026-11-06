@@ -1,0 +1,9 @@
+{
+  "model": "yasm:models/girls/example_girl/model.gltf",
+  "scale": 1.0,
+  "shadow_radius": 0.35,
+  "animation_aliases": {
+    "idle": "Idle",
+    "walk": "Walk"
+  }
+}
