@@ -4,7 +4,7 @@ import de.javagl.jgltf.model.*;
 
 import java.io.IOException;
 
-/** Converts jGLTF accessor data to the flat float/int arrays used by YASM. */
+/** Converts jGLTF accessor data to the flat arrays used by YASM. */
 final class GltfAccessorDecoder {
     private static final int BYTE = 5120;
     private static final int UNSIGNED_BYTE = 5121;
@@ -17,9 +17,8 @@ final class GltfAccessorDecoder {
 
     static float[] readPositions(AccessorModel accessor) throws IOException {
         requireShape(accessor, "POSITION", 3);
-        if (accessor.getComponentType() != FLOAT || accessor.isNormalized()) {
+        if (accessor.getComponentType() != FLOAT || accessor.isNormalized())
             throw new IOException("POSITION must use non-normalized FLOAT components");
-        }
         return readFloats(accessor);
     }
 
@@ -40,31 +39,55 @@ final class GltfAccessorDecoder {
         throw new IOException("TEXCOORD_0 must use FLOAT or normalized BYTE/UBYTE/SHORT/USHORT components");
     }
 
-    static int[] readIndices(AccessorModel accessor) throws IOException {
-        requireShape(accessor, "indices", 1);
-        if (accessor.isNormalized()) throw new IOException("Index accessor cannot be normalized");
-
+    static int[] readJoints(AccessorModel accessor) throws IOException {
+        requireShape(accessor, "JOINTS_0", 4);
+        if (accessor.isNormalized()) throw new IOException("JOINTS_0 cannot be normalized");
         AccessorData data = accessor.getAccessorData();
-        int[] result = new int[accessor.getCount()];
+        int[] result = new int[accessor.getCount() * 4];
         switch (accessor.getComponentType()) {
             case UNSIGNED_BYTE -> {
                 if (!(data instanceof AccessorByteData bytes) || !bytes.isUnsigned())
-                    throw new IOException("Invalid UNSIGNED_BYTE index accessor data");
+                    throw new IOException("Invalid JOINTS_0 UNSIGNED_BYTE accessor data");
                 for (int i = 0; i < result.length; i++) result[i] = bytes.getInt(i);
             }
             case UNSIGNED_SHORT -> {
                 if (!(data instanceof AccessorShortData shorts) || !shorts.isUnsigned())
-                    throw new IOException("Invalid UNSIGNED_SHORT index accessor data");
+                    throw new IOException("Invalid JOINTS_0 UNSIGNED_SHORT accessor data");
+                for (int i = 0; i < result.length; i++) result[i] = shorts.getInt(i);
+            }
+            default -> throw new IOException("JOINTS_0 must use UNSIGNED_BYTE or UNSIGNED_SHORT");
+        }
+        return result;
+    }
+
+    static float[] readWeights(AccessorModel accessor) throws IOException {
+        requireShape(accessor, "WEIGHTS_0", 4);
+        int type = accessor.getComponentType();
+        if (type == FLOAT && !accessor.isNormalized()) return readFloats(accessor);
+        if ((type == UNSIGNED_BYTE || type == UNSIGNED_SHORT) && accessor.isNormalized())
+            return readNormalizedIntegers(accessor);
+        throw new IOException("WEIGHTS_0 must use FLOAT or normalized UNSIGNED_BYTE/UNSIGNED_SHORT");
+    }
+
+    static int[] readIndices(AccessorModel accessor) throws IOException {
+        requireShape(accessor, "indices", 1);
+        if (accessor.isNormalized()) throw new IOException("Index accessor cannot be normalized");
+        AccessorData data = accessor.getAccessorData();
+        int[] result = new int[accessor.getCount()];
+        switch (accessor.getComponentType()) {
+            case UNSIGNED_BYTE -> {
+                if (!(data instanceof AccessorByteData bytes) || !bytes.isUnsigned()) throw new IOException("Invalid UNSIGNED_BYTE index accessor data");
+                for (int i = 0; i < result.length; i++) result[i] = bytes.getInt(i);
+            }
+            case UNSIGNED_SHORT -> {
+                if (!(data instanceof AccessorShortData shorts) || !shorts.isUnsigned()) throw new IOException("Invalid UNSIGNED_SHORT index accessor data");
                 for (int i = 0; i < result.length; i++) result[i] = shorts.getInt(i);
             }
             case UNSIGNED_INT -> {
-                if (!(data instanceof AccessorIntData ints) || !ints.isUnsigned())
-                    throw new IOException("Invalid UNSIGNED_INT index accessor data");
+                if (!(data instanceof AccessorIntData ints) || !ints.isUnsigned()) throw new IOException("Invalid UNSIGNED_INT index accessor data");
                 for (int i = 0; i < result.length; i++) {
                     long value = ints.getLong(i);
-                    if (value > Integer.MAX_VALUE) {
-                        throw new IOException("Index exceeds Java signed int range: " + value);
-                    }
+                    if (value > Integer.MAX_VALUE) throw new IOException("Index exceeds Java signed int range: " + value);
                     result[i] = (int) value;
                 }
             }
@@ -75,9 +98,7 @@ final class GltfAccessorDecoder {
 
     private static float[] readFloats(AccessorModel accessor) throws IOException {
         AccessorData data = accessor.getAccessorData();
-        if (!(data instanceof AccessorFloatData floats)) {
-            throw new IOException("Expected FLOAT accessor data");
-        }
+        if (!(data instanceof AccessorFloatData floats)) throw new IOException("Expected FLOAT accessor data");
         float[] values = new float[floats.getTotalNumComponents()];
         for (int i = 0; i < values.length; i++) {
             float value = floats.get(i);
@@ -92,7 +113,6 @@ final class GltfAccessorDecoder {
         int count = accessor.getCount() * data.getNumComponentsPerElement();
         float[] result = new float[count];
         int type = accessor.getComponentType();
-
         for (int i = 0; i < count; i++) {
             switch (type) {
                 case BYTE, UNSIGNED_BYTE -> {
@@ -113,8 +133,7 @@ final class GltfAccessorDecoder {
 
     private static void requireShape(AccessorModel accessor, String semantic, int components) throws IOException {
         if (accessor == null) throw new IOException("Missing accessor for " + semantic);
-        if (accessor.getCount() < 1 || accessor.getElementType().getNumComponents() != components) {
+        if (accessor.getCount() < 1 || accessor.getElementType().getNumComponents() != components)
             throw new IOException(semantic + " must have " + components + " components per element");
-        }
     }
 }
