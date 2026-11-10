@@ -37,13 +37,24 @@ public final class GltfModelLoader {
             stageReferences(json, modelLocation, temp);
 
             de.javagl.jgltf.model.GltfModel parsed = new GltfModelReader().read(stagedModel);
-            return convert(modelLocation, parsed);
+            return convert(modelLocation, parsed, readDefaultSceneIndex(json));
         } catch (JsonParseException | IllegalStateException | ClassCastException e) {
             throw new IOException("Invalid glTF JSON resource " + modelLocation, e);
         } catch (RuntimeException e) {
             throw new IOException("Failed to load glTF model " + modelLocation, e);
         } finally {
             deleteTree(temp);
+        }
+    }
+
+    private static int readDefaultSceneIndex(JsonObject json) throws IOException {
+        if (!json.has("scene") || json.get("scene").isJsonNull()) return -1;
+        try {
+            int index = json.get("scene").getAsInt();
+            if (index < 0) throw new IOException("glTF default scene index cannot be negative");
+            return index;
+        } catch (NumberFormatException | UnsupportedOperationException e) {
+            throw new IOException("Invalid glTF default scene index", e);
         }
     }
 
@@ -115,7 +126,8 @@ public final class GltfModelLoader {
         }
     }
 
-    private GltfModel convert(ResourceLocation source, de.javagl.jgltf.model.GltfModel parsed) throws IOException {
+    private GltfModel convert(ResourceLocation source, de.javagl.jgltf.model.GltfModel parsed,
+                              int defaultSceneIndex) throws IOException {
         List<MaterialModel> materials = parsed.getMaterialModels();
         List<String> slots = new ArrayList<>(materials.size());
         for (int i = 0; i < materials.size(); i++) {
@@ -123,8 +135,12 @@ public final class GltfModelLoader {
             slots.add(name == null || name.isBlank() ? "material_" + i : name);
         }
 
+        List<MeshModel> sourceMeshes = parsed.getMeshModels();
+        IdentityHashMap<MeshModel, Integer> meshIndices = new IdentityHashMap<>();
         List<GltfModel.Mesh> meshes = new ArrayList<>();
-        for (MeshModel mesh : parsed.getMeshModels()) {
+        for (int meshIndex = 0; meshIndex < sourceMeshes.size(); meshIndex++) {
+            MeshModel mesh = sourceMeshes.get(meshIndex);
+            meshIndices.put(mesh, meshIndex);
             List<GltfModel.Primitive> primitives = new ArrayList<>();
             for (MeshPrimitiveModel primitive : mesh.getMeshPrimitiveModels()) {
                 Map<String, AccessorModel> attributes = primitive.getAttributes();
@@ -156,8 +172,50 @@ public final class GltfModelLoader {
             meshes.add(new GltfModel.Mesh(mesh.getName(), primitives));
         }
 
-        return new GltfModel(source, meshes, slots, parsed.getNodeModels().size(),
-                parsed.getSkinModels().size(), parsed.getAnimationModels().size());
+        List<NodeModel> sourceNodes = parsed.getNodeModels();
+        IdentityHashMap<NodeModel, Integer> nodeIndices = new IdentityHashMap<>();
+        for (int i = 0; i < sourceNodes.size(); i++) nodeIndices.put(sourceNodes.get(i), i);
+
+        List<SkinModel> sourceSkins = parsed.getSkinModels();
+        IdentityHashMap<SkinModel, Integer> skinIndices = new IdentityHashMap<>();
+        for (int i = 0; i < sourceSkins.size(); i++) skinIndices.put(sourceSkins.get(i), i);
+
+        List<GltfModel.Node> nodes = new ArrayList<>(sourceNodes.size());
+        for (NodeModel node : sourceNodes) {
+            int parentIndex = node.getParent() == null ? -1 : requireIndex(nodeIndices, node.getParent(), "parent node");
+            List<Integer> childIndices = new ArrayList<>(node.getChildren().size());
+            for (NodeModel child : node.getChildren()) childIndices.add(requireIndex(nodeIndices, child, "child node"));
+
+            List<Integer> attachedMeshes = new ArrayList<>(node.getMeshModels().size());
+            for (MeshModel mesh : node.getMeshModels()) attachedMeshes.add(requireIndex(meshIndices, mesh, "mesh"));
+
+            int skinIndex = node.getSkinModel() == null ? -1
+                    : requireIndex(skinIndices, node.getSkinModel(), "skin");
+            double[] transform = node.computeLocalTransform(null).clone();
+            nodes.add(new GltfModel.Node(node.getName(), parentIndex, childIndices, attachedMeshes,
+                    skinIndex, transform));
+        }
+
+        List<GltfModel.Scene> scenes = new ArrayList<>();
+        for (SceneModel scene : parsed.getSceneModels()) {
+            List<Integer> roots = new ArrayList<>(scene.getNodeModels().size());
+            for (NodeModel root : scene.getNodeModels()) roots.add(requireIndex(nodeIndices, root, "scene root node"));
+            scenes.add(new GltfModel.Scene(scene.getName(), roots));
+        }
+        if (defaultSceneIndex >= scenes.size()) {
+            throw new IOException("glTF default scene index " + defaultSceneIndex
+                    + " is outside scene count " + scenes.size());
+        }
+
+        return new GltfModel(source, meshes, slots, nodes, scenes, defaultSceneIndex,
+                sourceSkins.size(), parsed.getAnimationModels().size());
+    }
+
+    private static <T> int requireIndex(IdentityHashMap<T, Integer> indices, T value, String description)
+            throws IOException {
+        Integer index = indices.get(value);
+        if (index == null) throw new IOException("Unable to resolve " + description + " reference");
+        return index;
     }
 
     private static void deleteTree(Path root) {
