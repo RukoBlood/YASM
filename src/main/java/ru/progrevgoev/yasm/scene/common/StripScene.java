@@ -2,11 +2,11 @@ package ru.progrevgoev.yasm.scene.common;
 
 import net.minecraft.resources.ResourceLocation;
 import ru.progrevgoev.yasm.Main;
-import ru.progrevgoev.yasm.scene.Scene;
+import ru.progrevgoev.yasm.scene.IScene;
 import ru.progrevgoev.yasm.scene.SceneContext;
 
 /** Shared scene implementation placeholder. Character-specific animation/material IDs belong in model config. */
-public final class StripScene implements Scene {
+public final class StripScene implements IScene {
     private static final ResourceLocation ID = ResourceLocation.fromNamespaceAndPath(Main.MOD_ID, "common/strip");
 
     @Override

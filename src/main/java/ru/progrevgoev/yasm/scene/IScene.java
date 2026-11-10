@@ -3,7 +3,7 @@ package ru.progrevgoev.yasm.scene;
 import net.minecraft.resources.ResourceLocation;
 
 /** A server-authoritative, tick-driven scene. Implementations should be deterministic on the server. */
-public interface Scene {
+public interface IScene {
     ResourceLocation id();
 
     default boolean canStart(SceneContext context) { return true; }
