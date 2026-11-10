@@ -242,8 +242,79 @@ public final class GltfModelLoader {
         }
         if (defaultSceneIndex >= scenes.size())
             throw new IOException("glTF default scene index " + defaultSceneIndex + " is outside scene count " + scenes.size());
-        return new GltfModel(source, meshes, slots, nodes, scenes, skins,
-                defaultSceneIndex, parsed.getAnimationModels().size());
+        List<GltfModel.Animation> animations = new ArrayList<>();
+        for (AnimationModel animation : parsed.getAnimationModels()) {
+            List<GltfModel.AnimationChannel> channels = new ArrayList<>();
+            for (AnimationModel.Channel channel : animation.getChannels()) {
+                NodeModel targetNode = channel.getNodeModel();
+                if (targetNode == null) throw new IOException("Animation channel has no target node");
+                int targetNodeIndex = requireIndex(nodeIndices, targetNode, "animation target node");
+                String path = channel.getPath();
+                if (!("translation".equals(path) || "rotation".equals(path)
+                        || "scale".equals(path) || "weights".equals(path)))
+                    throw new IOException("Unsupported glTF animation target path: " + path);
+
+                AnimationModel.Sampler sampler = channel.getSampler();
+                if (sampler == null || sampler.getInput() == null || sampler.getOutput() == null
+                        || sampler.getInterpolation() == null)
+                    throw new IOException("Animation channel has an incomplete sampler");
+                AccessorModel input = sampler.getInput();
+                AccessorModel output = sampler.getOutput();
+                if (input.getComponentType() != 5126 || input.isNormalized()
+                        || input.getElementType().getNumComponents() != 1)
+                    throw new IOException("Animation sampler input must be a non-normalized FLOAT SCALAR accessor");
+                if (output.getComponentType() != 5126 || output.isNormalized())
+                    throw new IOException("Animation sampler output must use non-normalized FLOAT components");
+
+                float[] times = readAnimationFloats(input, "animation input");
+                int interpolationMultiplier = sampler.getInterpolation() == AnimationModel.Interpolation.CUBICSPLINE ? 3 : 1;
+                int componentsPerValue;
+                if ("translation".equals(path) || "scale".equals(path)) componentsPerValue = 3;
+                else if ("rotation".equals(path)) componentsPerValue = 4;
+                else {
+                    if (output.getElementType().getNumComponents() != 1)
+                        throw new IOException("Animation weights output must use SCALAR elements");
+                    int denominator = times.length * interpolationMultiplier;
+                    if (denominator == 0 || output.getCount() % denominator != 0)
+                        throw new IOException("Animation weights output count does not match input keyframes");
+                    componentsPerValue = output.getCount() / denominator;
+                    if (componentsPerValue < 1)
+                        throw new IOException("Animation weights channel has no morph target values");
+                }
+                if ("weights".equals(path)) {
+                    if (output.getCount() != times.length * componentsPerValue * interpolationMultiplier)
+                        throw new IOException("Animation weights output count is inconsistent");
+                } else if (output.getElementType().getNumComponents() != componentsPerValue
+                        || output.getCount() != times.length * interpolationMultiplier) {
+                    throw new IOException("Animation output shape does not match target path " + path);
+                }
+
+                float[] values = readAnimationFloats(output, "animation output");
+                String interpolation = sampler.getInterpolation().name();
+                try {
+                    channels.add(new GltfModel.AnimationChannel(targetNodeIndex, path, interpolation,
+                            times, values, componentsPerValue));
+                } catch (IllegalArgumentException e) {
+                    throw new IOException("Invalid animation channel: " + e.getMessage(), e);
+                }
+            }
+            animations.add(new GltfModel.Animation(animation.getName(), channels));
+        }
+
+        return new GltfModel(source, meshes, slots, nodes, scenes, skins, animations, defaultSceneIndex);
+    }
+
+    private static float[] readAnimationFloats(AccessorModel accessor, String description) throws IOException {
+        AccessorData data = accessor.getAccessorData();
+        if (!(data instanceof AccessorFloatData floats))
+            throw new IOException(description + " accessor does not contain FLOAT data");
+        float[] result = new float[floats.getTotalNumComponents()];
+        for (int i = 0; i < result.length; i++) {
+            float value = floats.get(i);
+            if (!Float.isFinite(value)) throw new IOException(description + " contains a non-finite value");
+            result[i] = value;
+        }
+        return result;
     }
 
     private static <T> int requireIndex(IdentityHashMap<T, Integer> indices, T value, String description)

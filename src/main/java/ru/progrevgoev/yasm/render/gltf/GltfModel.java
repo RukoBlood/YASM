@@ -13,24 +13,23 @@ public final class GltfModel {
     private final List<Node> nodes;
     private final List<Scene> scenes;
     private final List<Skin> skins;
+    private final List<Animation> animations;
     private final int defaultSceneIndex;
-    private final int animationCount;
 
     public GltfModel(ResourceLocation source, List<Mesh> meshes, List<String> materialSlots,
                      List<Node> nodes, List<Scene> scenes, List<Skin> skins,
-                     int defaultSceneIndex, int animationCount) {
+                     List<Animation> animations, int defaultSceneIndex) {
         this.source = Objects.requireNonNull(source, "source");
         this.meshes = List.copyOf(meshes);
         this.materialSlots = List.copyOf(materialSlots);
         this.nodes = List.copyOf(nodes);
         this.scenes = List.copyOf(scenes);
         this.skins = List.copyOf(skins);
+        this.animations = List.copyOf(animations);
         if (defaultSceneIndex < -1 || defaultSceneIndex >= this.scenes.size()) {
             throw new IllegalArgumentException("Default scene index is out of range: " + defaultSceneIndex);
         }
-        if (animationCount < 0) throw new IllegalArgumentException("Animation count cannot be negative");
         this.defaultSceneIndex = defaultSceneIndex;
-        this.animationCount = animationCount;
     }
 
     public ResourceLocation source() { return source; }
@@ -39,11 +38,12 @@ public final class GltfModel {
     public List<Node> nodes() { return nodes; }
     public List<Scene> scenes() { return scenes; }
     public List<Skin> skins() { return skins; }
+    public List<Animation> animations() { return animations; }
     /** Returns -1 when the glTF asset does not declare a default scene. */
     public int defaultSceneIndex() { return defaultSceneIndex; }
     public int nodeCount() { return nodes.size(); }
     public int skinCount() { return skins.size(); }
-    public int animationCount() { return animationCount; }
+    public int animationCount() { return animations.size(); }
     public int primitiveCount() { return meshes.stream().mapToInt(m -> m.primitives().size()).sum(); }
 
     public record Mesh(String name, List<Primitive> primitives) {
@@ -90,6 +90,65 @@ public final class GltfModel {
         public List<Integer> jointNodeIndices() { return jointNodeIndices; }
         public float[] inverseBindMatrices() { return inverseBindMatrices.clone(); }
         public int jointCount() { return jointNodeIndices.size(); }
+    }
+
+    /** One source glTF animation. Channels retain their original keyframe data. */
+    public record Animation(String name, List<AnimationChannel> channels) {
+        public Animation {
+            name = name == null || name.isBlank() ? "unnamed_animation" : name;
+            channels = List.copyOf(channels);
+        }
+    }
+
+    /**
+     * Animation data for one node property. Values are flattened floats.
+     * For CUBICSPLINE, each keyframe stores in-tangent, value, out-tangent
+     * consecutively, as required by glTF.
+     */
+    public static final class AnimationChannel {
+        private final int nodeIndex;
+        private final String path;
+        private final String interpolation;
+        private final float[] times;
+        private final float[] values;
+        private final int componentsPerValue;
+
+        public AnimationChannel(int nodeIndex, String path, String interpolation,
+                                float[] times, float[] values, int componentsPerValue) {
+            if (nodeIndex < 0) throw new IllegalArgumentException("Animation target node index cannot be negative");
+            if (!("translation".equals(path) || "rotation".equals(path)
+                    || "scale".equals(path) || "weights".equals(path)))
+                throw new IllegalArgumentException("Unsupported animation path: " + path);
+            if (!("STEP".equals(interpolation) || "LINEAR".equals(interpolation)
+                    || "CUBICSPLINE".equals(interpolation)))
+                throw new IllegalArgumentException("Unsupported interpolation: " + interpolation);
+            if (times == null || times.length == 0) throw new IllegalArgumentException("Animation has no keyframes");
+            if (values == null || componentsPerValue < 1) throw new IllegalArgumentException("Invalid animation output data");
+            int multiplier = "CUBICSPLINE".equals(interpolation) ? 3 : 1;
+            if (values.length != times.length * componentsPerValue * multiplier)
+                throw new IllegalArgumentException("Animation output size does not match its keyframes");
+            this.times = times.clone();
+            for (int i = 0; i < this.times.length; i++) {
+                if (!Float.isFinite(this.times[i]) || this.times[i] < 0.0f
+                        || (i > 0 && this.times[i] <= this.times[i - 1]))
+                    throw new IllegalArgumentException("Animation keyframe times must be finite, non-negative and increasing");
+            }
+            this.values = values.clone();
+            for (float value : this.values) if (!Float.isFinite(value))
+                throw new IllegalArgumentException("Animation output contains a non-finite value");
+            this.nodeIndex = nodeIndex;
+            this.path = path;
+            this.interpolation = interpolation;
+            this.componentsPerValue = componentsPerValue;
+        }
+
+        public int nodeIndex() { return nodeIndex; }
+        public String path() { return path; }
+        public String interpolation() { return interpolation; }
+        public float[] times() { return times.clone(); }
+        public float[] values() { return values.clone(); }
+        public int componentsPerValue() { return componentsPerValue; }
+        public int keyframeCount() { return times.length; }
     }
 
     /** Matrices are 4x4, column-major, and map local node coordinates into parent space. */
