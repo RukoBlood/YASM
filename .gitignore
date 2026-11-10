@@ -7,3 +7,4 @@ runs/
 .DS_Store
 Thumbs.db
 /run/
+/.gigaide/
