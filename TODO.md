@@ -1,2 +1,1 @@
-1. Add GLTF support.
-2. Actually give Example girl a model.
+1. Add GLTF support. See GLTF-Plan.md
