@@ -237,27 +237,32 @@ public final class GltfModelLoader {
         List<GltfModel.Scene> scenes = new ArrayList<>();
         for (SceneModel scene : parsed.getSceneModels()) {
             List<Integer> roots = new ArrayList<>(scene.getNodeModels().size());
-            for (NodeModel root : scene.getNodeModels()) roots.add(requireIndex(nodeIndices, root, "scene root node"));
+            for (NodeModel root : scene.getNodeModels())
+                roots.add(requireIndex(nodeIndices, root, "scene root node"));
+
             scenes.add(new GltfModel.Scene(scene.getName(), roots));
         }
         if (defaultSceneIndex >= scenes.size())
             throw new IOException("glTF default scene index " + defaultSceneIndex + " is outside scene count " + scenes.size());
+
         List<GltfModel.Animation> animations = new ArrayList<>();
         for (AnimationModel animation : parsed.getAnimationModels()) {
             List<GltfModel.AnimationChannel> channels = new ArrayList<>();
             for (AnimationModel.Channel channel : animation.getChannels()) {
                 NodeModel targetNode = channel.getNodeModel();
-                if (targetNode == null) throw new IOException("Animation channel has no target node");
+                if (targetNode == null)
+                    throw new IOException("Animation channel has no target node");
+
                 int targetNodeIndex = requireIndex(nodeIndices, targetNode, "animation target node");
                 String path = channel.getPath();
-                if (!("translation".equals(path) || "rotation".equals(path)
-                        || "scale".equals(path) || "weights".equals(path)))
+
+                if (!("translation".equals(path) || "rotation".equals(path) || "scale".equals(path) || "weights".equals(path)))
                     throw new IOException("Unsupported glTF animation target path: " + path);
 
                 AnimationModel.Sampler sampler = channel.getSampler();
-                if (sampler == null || sampler.getInput() == null || sampler.getOutput() == null
-                        || sampler.getInterpolation() == null)
+                if (sampler == null || sampler.getInput() == null || sampler.getOutput() == null || sampler.getInterpolation() == null)
                     throw new IOException("Animation channel has an incomplete sampler");
+
                 AccessorModel input = sampler.getInput();
                 AccessorModel output = sampler.getOutput();
                 if (input.getComponentType() != 5126 || input.isNormalized()
@@ -269,31 +274,34 @@ public final class GltfModelLoader {
                 float[] times = readAnimationFloats(input, "animation input");
                 int interpolationMultiplier = sampler.getInterpolation() == AnimationModel.Interpolation.CUBICSPLINE ? 3 : 1;
                 int componentsPerValue;
-                if ("translation".equals(path) || "scale".equals(path)) componentsPerValue = 3;
-                else if ("rotation".equals(path)) componentsPerValue = 4;
+                if ("translation".equals(path) || "scale".equals(path))
+                    componentsPerValue = 3;
+                else if ("rotation".equals(path))
+                    componentsPerValue = 4;
                 else {
                     if (output.getElementType().getNumComponents() != 1)
                         throw new IOException("Animation weights output must use SCALAR elements");
+
                     int denominator = times.length * interpolationMultiplier;
                     if (denominator == 0 || output.getCount() % denominator != 0)
                         throw new IOException("Animation weights output count does not match input keyframes");
+
                     componentsPerValue = output.getCount() / denominator;
                     if (componentsPerValue < 1)
                         throw new IOException("Animation weights channel has no morph target values");
+
                 }
                 if ("weights".equals(path)) {
                     if (output.getCount() != times.length * componentsPerValue * interpolationMultiplier)
                         throw new IOException("Animation weights output count is inconsistent");
-                } else if (output.getElementType().getNumComponents() != componentsPerValue
-                        || output.getCount() != times.length * interpolationMultiplier) {
+                } else if (output.getElementType().getNumComponents() != componentsPerValue || output.getCount() != times.length * interpolationMultiplier) {
                     throw new IOException("Animation output shape does not match target path " + path);
                 }
 
                 float[] values = readAnimationFloats(output, "animation output");
                 String interpolation = sampler.getInterpolation().name();
                 try {
-                    channels.add(new GltfModel.AnimationChannel(targetNodeIndex, path, interpolation,
-                            times, values, componentsPerValue));
+                    channels.add(new GltfModel.AnimationChannel(targetNodeIndex, path, interpolation, times, values, componentsPerValue));
                 } catch (IllegalArgumentException e) {
                     throw new IOException("Invalid animation channel: " + e.getMessage(), e);
                 }
@@ -308,10 +316,12 @@ public final class GltfModelLoader {
         AccessorData data = accessor.getAccessorData();
         if (!(data instanceof AccessorFloatData floats))
             throw new IOException(description + " accessor does not contain FLOAT data");
+
         float[] result = new float[floats.getTotalNumComponents()];
         for (int i = 0; i < result.length; i++) {
             float value = floats.get(i);
-            if (!Float.isFinite(value)) throw new IOException(description + " contains a non-finite value");
+            if (!Float.isFinite(value))
+                throw new IOException(description + " contains a non-finite value");
             result[i] = value;
         }
         return result;
@@ -320,7 +330,8 @@ public final class GltfModelLoader {
     private static <T> int requireIndex(IdentityHashMap<T, Integer> indices, T value, String description)
             throws IOException {
         Integer index = indices.get(value);
-        if (index == null) throw new IOException("Unable to resolve " + description + " reference");
+        if (index == null)
+            throw new IOException("Unable to resolve " + description + " reference");
         return index;
     }
 
