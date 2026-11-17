@@ -152,6 +152,10 @@ public final class GltfModel {
     }
 
     /** Matrices are 4x4, column-major, and map local node coordinates into parent space. */
+
+    /**
+     * Matrices are 4x4, column-major, and map local node coordinates into parent space.
+     */
     public static final class Node {
         private final String name;
         private final int parentIndex;
@@ -159,18 +163,66 @@ public final class GltfModel {
         private final List<Integer> meshIndices;
         private final int skinIndex;
         private final double[] localTransform;
+        private final float[] translation;
+        private final float[] rotation;
+        private final float[] scale;
+        private final boolean matrixTransform;
 
         public Node(String name, int parentIndex, List<Integer> childIndices,
                     List<Integer> meshIndices, int skinIndex, double[] localTransform) {
+            this(name, parentIndex, childIndices, meshIndices, skinIndex,
+                    localTransform,
+                    new float[]{0.0f, 0.0f, 0.0f},
+                    new float[]{0.0f, 0.0f, 0.0f, 1.0f},
+                    new float[]{1.0f, 1.0f, 1.0f},
+                    false);
+        }
+
+        public Node(String name, int parentIndex, List<Integer> childIndices,
+                    List<Integer> meshIndices, int skinIndex, double[] localTransform,
+                    float[] translation, float[] rotation, float[] scale,
+                    boolean matrixTransform) {
             this.name = name == null || name.isBlank() ? "unnamed_node" : name;
             this.parentIndex = parentIndex;
             this.childIndices = List.copyOf(childIndices);
             this.meshIndices = List.copyOf(meshIndices);
             this.skinIndex = skinIndex;
-            if (parentIndex < -1 || skinIndex < -1) throw new IllegalArgumentException("Node indices cannot be less than -1");
-            if (localTransform == null || localTransform.length != 16)
+
+            if (parentIndex < -1 || skinIndex < -1) {
+                throw new IllegalArgumentException("Node indices cannot be less than -1");
+            }
+
+            if (localTransform == null || localTransform.length != 16) {
                 throw new IllegalArgumentException("Node local transform must contain 16 values");
+            }
+
             this.localTransform = localTransform.clone();
+            for (double value : this.localTransform) {
+                if (!Double.isFinite(value)) {
+                    throw new IllegalArgumentException("Node transform contains a non-finite value");
+                }
+            }
+
+            this.translation = copyComponents(translation, 3, "translation");
+            this.rotation = copyComponents(rotation, 4, "rotation");
+            this.scale = copyComponents(scale, 3, "scale");
+            this.matrixTransform = matrixTransform;
+        }
+
+        private static float[] copyComponents(float[] source, int expected, String name) {
+            if (source == null || source.length != expected) {
+                throw new IllegalArgumentException(
+                        "Node " + name + " must contain " + expected + " values");
+            }
+
+            float[] result = source.clone();
+            for (float value : result) {
+                if (!Float.isFinite(value)) {
+                    throw new IllegalArgumentException(
+                            "Node " + name + " contains a non-finite value");
+                }
+            }
+            return result;
         }
 
         public String name() { return name; }
@@ -179,7 +231,12 @@ public final class GltfModel {
         public List<Integer> meshIndices() { return meshIndices; }
         public int skinIndex() { return skinIndex; }
         public double[] localTransform() { return localTransform.clone(); }
+        public float[] translation() { return translation.clone(); }
+        public float[] rotation() { return rotation.clone(); }
+        public float[] scale() { return scale.clone(); }
+        public boolean matrixTransform() { return matrixTransform; }
     }
+
 
     /** Vertex attributes are flattened; JOINTS_0 has four indices and WEIGHTS_0 four weights per vertex. */
     public static final class Primitive {
