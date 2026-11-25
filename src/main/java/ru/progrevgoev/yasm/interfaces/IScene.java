@@ -1,6 +1,7 @@
-package ru.progrevgoev.yasm.scene;
+package ru.progrevgoev.yasm.interfaces;
 
 import net.minecraft.resources.ResourceLocation;
+import ru.progrevgoev.yasm.scene.SceneContext;
 
 /** A server-authoritative, tick-driven scene. Implementations should be deterministic on the server. */
 public interface IScene {

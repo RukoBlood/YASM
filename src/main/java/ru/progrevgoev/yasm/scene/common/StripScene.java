@@ -2,7 +2,7 @@ package ru.progrevgoev.yasm.scene.common;
 
 import net.minecraft.resources.ResourceLocation;
 import ru.progrevgoev.yasm.Main;
-import ru.progrevgoev.yasm.scene.IScene;
+import ru.progrevgoev.yasm.interfaces.IScene;
 import ru.progrevgoev.yasm.scene.SceneContext;
 
 /** Shared scene implementation placeholder. Character-specific animation/material IDs belong in model config. */

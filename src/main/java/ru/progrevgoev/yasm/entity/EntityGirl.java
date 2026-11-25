@@ -20,6 +20,10 @@ public abstract class EntityGirl extends PathfinderMob {
     private final SceneManager sceneManager = new SceneManager(this);
     private BehaviorMode behaviorMode = BehaviorMode.FOLLOW;
 
+    public boolean isAnchored; //FLAG: is girl anchored to bed.
+    public static boolean hasSexWithPlayer; //FLAG: is girl having sex with player
+    public boolean isNaked; //FLAG: is Naked (Clothes material and/or model parts hidden)
+
     protected EntityGirl(EntityType<? extends EntityGirl> type, Level level) {
         super(type, level);
     }
@@ -38,7 +42,7 @@ public abstract class EntityGirl extends PathfinderMob {
         this.goalSelector.addGoal(2, new GoalFollowPlayer(this, 1.0D, 2.0F, 12.0F));
         this.goalSelector.addGoal(5, new GoalFreeRoam(this, 1.0D));
         this.goalSelector.addGoal(8, new RandomLookAroundGoal(this));
-        this.goalSelector.addGoal(9, new LookAtPlayerGoal(this, Player.class, 8.0F));
+        this.goalSelector.addGoal(9, new LookAtPlayerGoal(this, Player.class, 8.0F)); //Looks to player within 8 units.
     }
 
     @Override

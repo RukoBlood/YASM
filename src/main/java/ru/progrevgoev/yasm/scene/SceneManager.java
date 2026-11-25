@@ -3,6 +3,7 @@ package ru.progrevgoev.yasm.scene;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Player;
 import ru.progrevgoev.yasm.entity.EntityGirl;
+import ru.progrevgoev.yasm.interfaces.IScene;
 
 import java.util.LinkedHashMap;
 import java.util.Map;

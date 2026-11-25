@@ -9,6 +9,7 @@ import java.util.Objects;
 public final class GltfModel {
     private final ResourceLocation source;
     private final List<Mesh> meshes;
+    private final List<GltfMaterial> materials;
     private final List<String> materialSlots;
     private final List<Node> nodes;
     private final List<Scene> scenes;
@@ -19,8 +20,15 @@ public final class GltfModel {
     public GltfModel(ResourceLocation source, List<Mesh> meshes, List<String> materialSlots,
                      List<Node> nodes, List<Scene> scenes, List<Skin> skins,
                      List<Animation> animations, int defaultSceneIndex) {
+        this(source, meshes, List.of(), materialSlots, nodes, scenes, skins, animations, defaultSceneIndex);
+    }
+
+    public GltfModel(ResourceLocation source, List<Mesh> meshes, List<GltfMaterial> materials,
+                     List<String> materialSlots, List<Node> nodes, List<Scene> scenes,
+                     List<Skin> skins, List<Animation> animations, int defaultSceneIndex) {
         this.source = Objects.requireNonNull(source, "source");
         this.meshes = List.copyOf(meshes);
+        this.materials = List.copyOf(materials);
         this.materialSlots = List.copyOf(materialSlots);
         this.nodes = List.copyOf(nodes);
         this.scenes = List.copyOf(scenes);
@@ -29,11 +37,20 @@ public final class GltfModel {
         if (defaultSceneIndex < -1 || defaultSceneIndex >= this.scenes.size()) {
             throw new IllegalArgumentException("Default scene index is out of range: " + defaultSceneIndex);
         }
+        for (Mesh mesh : this.meshes) {
+            for (Primitive primitive : mesh.primitives()) {
+                if (primitive.materialIndex() >= this.materials.size()) {
+                    throw new IllegalArgumentException(
+                            "Primitive material index is outside material list: " + primitive.materialIndex());
+                }
+            }
+        }
         this.defaultSceneIndex = defaultSceneIndex;
     }
 
     public ResourceLocation source() { return source; }
     public List<Mesh> meshes() { return meshes; }
+    public List<GltfMaterial> materials() { return materials; }
     public List<String> materialSlots() { return materialSlots; }
     public List<Node> nodes() { return nodes; }
     public List<Scene> scenes() { return scenes; }
@@ -242,14 +259,23 @@ public final class GltfModel {
     public static final class Primitive {
         private final int mode;
         private final String materialSlot;
+        private final int materialIndex;
         private final float[] positions, normals, texCoords0, weights0;
         private final int[] joints0, indices;
 
         public Primitive(int mode, String materialSlot, float[] positions, float[] normals,
                          float[] texCoords0, int[] joints0, float[] weights0, int[] indices) {
+            this(mode, materialSlot, -1, positions, normals, texCoords0, joints0, weights0, indices);
+        }
+
+        public Primitive(int mode, String materialSlot, int materialIndex,
+                         float[] positions, float[] normals, float[] texCoords0,
+                         int[] joints0, float[] weights0, int[] indices) {
             if (mode < 0 || mode > 6) throw new IllegalArgumentException("Unsupported primitive mode: " + mode);
+            if (materialIndex < -1) throw new IllegalArgumentException("Material index cannot be less than -1");
             this.mode = mode;
             this.materialSlot = materialSlot == null || materialSlot.isBlank() ? "default" : materialSlot;
+            this.materialIndex = materialIndex;
             this.positions = Objects.requireNonNull(positions, "positions").clone();
             this.normals = normals == null ? new float[0] : normals.clone();
             this.texCoords0 = texCoords0 == null ? new float[0] : texCoords0.clone();
@@ -279,6 +305,8 @@ public final class GltfModel {
 
         public int mode() { return mode; }
         public String materialSlot() { return materialSlot; }
+        /** Returns -1 when the primitive does not explicitly reference a material. */
+        public int materialIndex() { return materialIndex; }
         public float[] positions() { return positions.clone(); }
         public float[] normals() { return normals.clone(); }
         public float[] texCoords0() { return texCoords0.clone(); }

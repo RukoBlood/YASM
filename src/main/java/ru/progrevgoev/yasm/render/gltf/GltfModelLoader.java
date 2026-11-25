@@ -158,12 +158,71 @@ public final class GltfModelLoader {
                               de.javagl.jgltf.model.GltfModel parsed,
                               int defaultSceneIndex) throws IOException {
 
-        List<MaterialModel> materials = parsed.getMaterialModels();
-        List<String> slots = new ArrayList<>(materials.size());
+        List<MaterialModel> sourceMaterials = parsed.getMaterialModels();
+        List<TextureModel> sourceTextures = parsed.getTextureModels();
+        IdentityHashMap<MaterialModel, Integer> materialIndices = new IdentityHashMap<>();
+        IdentityHashMap<TextureModel, Integer> textureIndices = new IdentityHashMap<>();
+        List<GltfMaterial> gltfMaterials = new ArrayList<>(sourceMaterials.size());
+        List<String> slots = new ArrayList<>(sourceMaterials.size());
 
-        for (int i = 0; i < materials.size(); i++) {
-            String name = materials.get(i).getName();
-            slots.add(name == null || name.isBlank() ? "material_" + i : name);
+        for (int i = 0; i < sourceTextures.size(); i++) {
+            textureIndices.put(sourceTextures.get(i), i);
+        }
+
+        for (int i = 0; i < sourceMaterials.size(); i++) {
+            MaterialModel sourceMaterial = sourceMaterials.get(i);
+            materialIndices.put(sourceMaterial, i);
+
+            String name = sourceMaterial.getName();
+            String materialName = name == null || name.isBlank() ? "material_" + i : name;
+            slots.add(materialName);
+
+            if (!(sourceMaterial instanceof PbrMaterialModel pbrMaterial)) {
+                throw new IOException("Unsupported glTF material model at index " + i
+                        + ": expected a glTF 2.0 PBR material");
+            }
+
+            PbrMetallicRoughnessModel pbr = pbrMaterial.getPbrMetallicRoughnessModel();
+            double[] sourceColorFactor = pbr == null ? null : pbr.getBaseColorFactor();
+            float[] baseColorFactor = readBaseColorFactor(sourceColorFactor, materialName);
+
+            TextureModel baseColorTexture = pbrMaterial.getBaseColorTextureModel();
+            int baseColorTextureIndex = baseColorTexture == null
+                    ? -1
+                    : requireIndex(textureIndices, baseColorTexture, "base color texture");
+
+            Integer sourceTexCoord = pbrMaterial.getBaseColorTexcoord();
+            int baseColorTexCoord = sourceTexCoord == null ? 0 : sourceTexCoord;
+            if (baseColorTexCoord != 0) {
+                throw new IOException("Material " + materialName + " uses TEXCOORD_" + baseColorTexCoord
+                        + " for its base color texture, but only TEXCOORD_0 is currently supported");
+            }
+
+            PbrMaterialModel.AlphaMode sourceAlphaMode = pbrMaterial.getAlphaMode();
+            GltfMaterial.AlphaMode alphaMode = sourceAlphaMode == null
+                    ? GltfMaterial.AlphaMode.OPAQUE
+                    : GltfMaterial.AlphaMode.valueOf(sourceAlphaMode.name());
+
+            Double sourceAlphaCutoff = pbrMaterial.getAlphaCutoff();
+            float alphaCutoff = sourceAlphaCutoff == null ? 0.5f : checkedFloat(
+                    sourceAlphaCutoff, "alpha cutoff for material " + materialName);
+
+            Boolean sourceDoubleSided = pbrMaterial.isDoubleSided();
+            boolean doubleSided = sourceDoubleSided != null && sourceDoubleSided;
+
+            try {
+                gltfMaterials.add(new GltfMaterial(
+                        materialName,
+                        baseColorFactor,
+                        baseColorTextureIndex,
+                        baseColorTexCoord,
+                        alphaMode,
+                        alphaCutoff,
+                        doubleSided
+                ));
+            } catch (IllegalArgumentException e) {
+                throw new IOException("Invalid glTF material " + materialName + ": " + e.getMessage(), e);
+            }
         }
 
         List<MeshModel> sourceMeshes = parsed.getMeshModels();
@@ -217,19 +276,18 @@ public final class GltfModelLoader {
 
                 MaterialModel material = primitive.getMaterialModel();
                 String slot = "default";
+                int materialIndex = -1;
 
                 if (material != null) {
-                    int index = materials.indexOf(material);
-                    String name = material.getName();
-                    slot = name == null || name.isBlank()
-                            ? "material_" + Math.max(index, 0)
-                            : name;
+                    materialIndex = requireIndex(materialIndices, material, "primitive material");
+                    slot = slots.get(materialIndex);
                 }
 
                 try {
                     primitives.add(new GltfModel.Primitive(
                             primitive.getMode(),
                             slot,
+                            materialIndex,
                             positions,
                             normals,
                             uv,
@@ -558,6 +616,7 @@ public final class GltfModelLoader {
         return new GltfModel(
                 source,
                 meshes,
+                gltfMaterials,
                 slots,
                 nodes,
                 scenes,
@@ -565,6 +624,34 @@ public final class GltfModelLoader {
                 animations,
                 defaultSceneIndex
         );
+    }
+
+    private static float[] readBaseColorFactor(double[] source, String materialName) throws IOException {
+        if (source == null) {
+            return new float[]{1.0f, 1.0f, 1.0f, 1.0f};
+        }
+        if (source.length != 4) {
+            throw new IOException("Base color factor for material " + materialName
+                    + " must contain four components");
+        }
+
+        float[] result = new float[4];
+        for (int i = 0; i < result.length; i++) {
+            double value = source[i];
+            if (!Double.isFinite(value) || value < 0.0 || value > 1.0) {
+                throw new IOException("Base color factor for material " + materialName
+                        + " contains an invalid component at index " + i);
+            }
+            result[i] = (float) value;
+        }
+        return result;
+    }
+
+    private static float checkedFloat(double value, String description) throws IOException {
+        if (!Double.isFinite(value) || Math.abs(value) > Float.MAX_VALUE) {
+            throw new IOException("Invalid " + description + ": " + value);
+        }
+        return (float) value;
     }
 
     /**

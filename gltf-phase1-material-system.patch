@@ -1,0 +1,302 @@
+diff --git a/src/main/java/ru/progrevgoev/yasm/render/gltf/GltfMaterial.java b/src/main/java/ru/progrevgoev/yasm/render/gltf/GltfMaterial.java
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/main/java/ru/progrevgoev/yasm/render/gltf/GltfMaterial.java
+@@ -0,0 +1,71 @@
++package ru.progrevgoev.yasm.render.gltf;
++
++import java.util.Objects;
++
++/**
++ * Immutable renderer-independent representation of the supported glTF material properties.
++ * Texture indices refer to the source glTF texture array and are resolved by the texture-loading
++ * stage. A value of -1 means that no base color texture is assigned.
++ */
++public final class GltfMaterial {
++    public enum AlphaMode {
++        OPAQUE,
++        MASK,
++        BLEND
++    }
++
++    private final String name;
++    private final float[] baseColorFactor;
++    private final int baseColorTextureIndex;
++    private final int baseColorTexCoord;
++    private final AlphaMode alphaMode;
++    private final float alphaCutoff;
++    private final boolean doubleSided;
++
++    public GltfMaterial(
++            String name,
++            float[] baseColorFactor,
++            int baseColorTextureIndex,
++            int baseColorTexCoord,
++            AlphaMode alphaMode,
++            float alphaCutoff,
++            boolean doubleSided
++    ) {
++        this.name = name == null || name.isBlank() ? "unnamed_material" : name;
++        Objects.requireNonNull(baseColorFactor, "baseColorFactor");
++        if (baseColorFactor.length != 4) {
++            throw new IllegalArgumentException("Base color factor must contain four components");
++        }
++        this.baseColorFactor = baseColorFactor.clone();
++        for (float component : this.baseColorFactor) {
++            if (!Float.isFinite(component) || component < 0.0f || component > 1.0f) {
++                throw new IllegalArgumentException("Base color components must be finite and in [0, 1]");
++            }
++        }
++
++        if (baseColorTextureIndex < -1) {
++            throw new IllegalArgumentException("Base color texture index cannot be less than -1");
++        }
++        if (baseColorTexCoord < 0) {
++            throw new IllegalArgumentException("Base color texture coordinate set cannot be negative");
++        }
++        if (!Float.isFinite(alphaCutoff) || alphaCutoff < 0.0f) {
++            throw new IllegalArgumentException("Alpha cutoff must be finite and non-negative");
++        }
++
++        this.baseColorTextureIndex = baseColorTextureIndex;
++        this.baseColorTexCoord = baseColorTexCoord;
++        this.alphaMode = Objects.requireNonNull(alphaMode, "alphaMode");
++        this.alphaCutoff = alphaCutoff;
++        this.doubleSided = doubleSided;
++    }
++
++    public String name() { return name; }
++    public float[] baseColorFactor() { return baseColorFactor.clone(); }
++    /** Returns -1 when the material has no base color texture. */
++    public int baseColorTextureIndex() { return baseColorTextureIndex; }
++    public int baseColorTexCoord() { return baseColorTexCoord; }
++    public AlphaMode alphaMode() { return alphaMode; }
++    public float alphaCutoff() { return alphaCutoff; }
++    public boolean doubleSided() { return doubleSided; }
++}
+diff --git a/src/main/java/ru/progrevgoev/yasm/render/gltf/GltfModel.java b/src/main/java/ru/progrevgoev/yasm/render/gltf/GltfModel.java
+index fc8ae9f..2222222 100644
+--- a/src/main/java/ru/progrevgoev/yasm/render/gltf/GltfModel.java
++++ b/src/main/java/ru/progrevgoev/yasm/render/gltf/GltfModel.java
+@@ -8,5 +8,6 @@ public final class GltfModel {
+     private final ResourceLocation source;
+     private final List<Mesh> meshes;
++    private final List<GltfMaterial> materials;
+     private final List<String> materialSlots;
+     private final List<Node> nodes;
+     private final List<Scene> scenes;
+@@ -17,19 +18,35 @@ public final class GltfModel {
+     public GltfModel(ResourceLocation source, List<Mesh> meshes, List<String> materialSlots,
+                      List<Node> nodes, List<Scene> scenes, List<Skin> skins,
+                      List<Animation> animations, int defaultSceneIndex) {
++        this(source, meshes, List.of(), materialSlots, nodes, scenes, skins, animations, defaultSceneIndex);
++    }
++
++    public GltfModel(ResourceLocation source, List<Mesh> meshes, List<GltfMaterial> materials,
++                     List<String> materialSlots, List<Node> nodes, List<Scene> scenes,
++                     List<Skin> skins, List<Animation> animations, int defaultSceneIndex) {
+         this.source = Objects.requireNonNull(source, "source");
+         this.meshes = List.copyOf(meshes);
++        this.materials = List.copyOf(materials);
+         this.materialSlots = List.copyOf(materialSlots);
+         this.nodes = List.copyOf(nodes);
+         this.scenes = List.copyOf(scenes);
+         this.skins = List.copyOf(skins);
+         this.animations = List.copyOf(animations);
+         if (defaultSceneIndex < -1 || defaultSceneIndex >= this.scenes.size()) {
+             throw new IllegalArgumentException("Default scene index is out of range: " + defaultSceneIndex);
+         }
++        for (Mesh mesh : this.meshes) {
++            for (Primitive primitive : mesh.primitives()) {
++                if (primitive.materialIndex() >= this.materials.size()) {
++                    throw new IllegalArgumentException(
++                            "Primitive material index is outside material list: " + primitive.materialIndex());
++                }
++            }
++        }
+         this.defaultSceneIndex = defaultSceneIndex;
+     }
+ 
+     public ResourceLocation source() { return source; }
+     public List<Mesh> meshes() { return meshes; }
++    public List<GltfMaterial> materials() { return materials; }
+     public List<String> materialSlots() { return materialSlots; }
+@@ -238,12 +256,21 @@ public final class GltfModel {
+     public static final class Primitive {
+         private final int mode;
+         private final String materialSlot;
++        private final int materialIndex;
+         private final float[] positions, normals, texCoords0, weights0;
+         private final int[] joints0, indices;
+ 
+         public Primitive(int mode, String materialSlot, float[] positions, float[] normals,
+                          float[] texCoords0, int[] joints0, float[] weights0, int[] indices) {
++            this(mode, materialSlot, -1, positions, normals, texCoords0, joints0, weights0, indices);
++        }
++
++        public Primitive(int mode, String materialSlot, int materialIndex,
++                         float[] positions, float[] normals, float[] texCoords0,
++                         int[] joints0, float[] weights0, int[] indices) {
+             if (mode < 0 || mode > 6) throw new IllegalArgumentException("Unsupported primitive mode: " + mode);
++            if (materialIndex < -1) throw new IllegalArgumentException("Material index cannot be less than -1");
+             this.mode = mode;
+             this.materialSlot = materialSlot == null || materialSlot.isBlank() ? "default" : materialSlot;
++            this.materialIndex = materialIndex;
+             this.positions = Objects.requireNonNull(positions, "positions").clone();
+@@ -274,6 +302,8 @@ public final class GltfModel {
+ 
+         public int mode() { return mode; }
+         public String materialSlot() { return materialSlot; }
++        /** Returns -1 when the primitive does not explicitly reference a material. */
++        public int materialIndex() { return materialIndex; }
+         public float[] positions() { return positions.clone(); }
+         public float[] normals() { return normals.clone(); }
+         public float[] texCoords0() { return texCoords0.clone(); }
+diff --git a/src/main/java/ru/progrevgoev/yasm/render/gltf/GltfModelLoader.java b/src/main/java/ru/progrevgoev/yasm/render/gltf/GltfModelLoader.java
+index 565f73a..3333333 100644
+--- a/src/main/java/ru/progrevgoev/yasm/render/gltf/GltfModelLoader.java
++++ b/src/main/java/ru/progrevgoev/yasm/render/gltf/GltfModelLoader.java
+@@ -159,12 +159,71 @@ public final class GltfModelLoader {
+                               int defaultSceneIndex) throws IOException {
+ 
+-        List<MaterialModel> materials = parsed.getMaterialModels();
+-        List<String> slots = new ArrayList<>(materials.size());
+-
+-        for (int i = 0; i < materials.size(); i++) {
+-            String name = materials.get(i).getName();
+-            slots.add(name == null || name.isBlank() ? "material_" + i : name);
+-        }
++        List<MaterialModel> sourceMaterials = parsed.getMaterialModels();
++        List<TextureModel> sourceTextures = parsed.getTextureModels();
++        IdentityHashMap<MaterialModel, Integer> materialIndices = new IdentityHashMap<>();
++        IdentityHashMap<TextureModel, Integer> textureIndices = new IdentityHashMap<>();
++        List<GltfMaterial> gltfMaterials = new ArrayList<>(sourceMaterials.size());
++        List<String> slots = new ArrayList<>(sourceMaterials.size());
++
++        for (int i = 0; i < sourceTextures.size(); i++) {
++            textureIndices.put(sourceTextures.get(i), i);
++        }
++
++        for (int i = 0; i < sourceMaterials.size(); i++) {
++            MaterialModel sourceMaterial = sourceMaterials.get(i);
++            materialIndices.put(sourceMaterial, i);
++
++            String name = sourceMaterial.getName();
++            String materialName = name == null || name.isBlank() ? "material_" + i : name;
++            slots.add(materialName);
++
++            if (!(sourceMaterial instanceof PbrMaterialModel pbrMaterial)) {
++                throw new IOException("Unsupported glTF material model at index " + i
++                        + ": expected a glTF 2.0 PBR material");
++            }
++
++            PbrMetallicRoughnessModel pbr = pbrMaterial.getPbrMetallicRoughnessModel();
++            double[] sourceColorFactor = pbr == null ? null : pbr.getBaseColorFactor();
++            float[] baseColorFactor = readBaseColorFactor(sourceColorFactor, materialName);
++
++            TextureModel baseColorTexture = pbrMaterial.getBaseColorTextureModel();
++            int baseColorTextureIndex = baseColorTexture == null
++                    ? -1
++                    : requireIndex(textureIndices, baseColorTexture, "base color texture");
++
++            Integer sourceTexCoord = pbrMaterial.getBaseColorTexcoord();
++            int baseColorTexCoord = sourceTexCoord == null ? 0 : sourceTexCoord;
++            if (baseColorTexCoord != 0) {
++                throw new IOException("Material " + materialName + " uses TEXCOORD_" + baseColorTexCoord
++                        + " for its base color texture, but only TEXCOORD_0 is currently supported");
++            }
++
++            PbrMaterialModel.AlphaMode sourceAlphaMode = pbrMaterial.getAlphaMode();
++            GltfMaterial.AlphaMode alphaMode = sourceAlphaMode == null
++                    ? GltfMaterial.AlphaMode.OPAQUE
++                    : GltfMaterial.AlphaMode.valueOf(sourceAlphaMode.name());
++
++            Double sourceAlphaCutoff = pbrMaterial.getAlphaCutoff();
++            float alphaCutoff = sourceAlphaCutoff == null ? 0.5f : checkedFloat(
++                    sourceAlphaCutoff, "alpha cutoff for material " + materialName);
++
++            Boolean sourceDoubleSided = pbrMaterial.isDoubleSided();
++            boolean doubleSided = sourceDoubleSided != null && sourceDoubleSided;
++
++            try {
++                gltfMaterials.add(new GltfMaterial(
++                        materialName,
++                        baseColorFactor,
++                        baseColorTextureIndex,
++                        baseColorTexCoord,
++                        alphaMode,
++                        alphaCutoff,
++                        doubleSided
++                ));
++            } catch (IllegalArgumentException e) {
++                throw new IOException("Invalid glTF material " + materialName + ": " + e.getMessage(), e);
++            }
++        }
+ 
+         List<MeshModel> sourceMeshes = parsed.getMeshModels();
+         IdentityHashMap<MeshModel, Integer> meshIndices = new IdentityHashMap<>();
+@@ -218,16 +277,15 @@ public final class GltfModelLoader {
+                 MaterialModel material = primitive.getMaterialModel();
+                 String slot = "default";
++                int materialIndex = -1;
+ 
+                 if (material != null) {
+-                    int index = materials.indexOf(material);
+-                    String name = material.getName();
+-                    slot = name == null || name.isBlank()
+-                            ? "material_" + Math.max(index, 0)
+-                            : name;
++                    materialIndex = requireIndex(materialIndices, material, "primitive material");
++                    slot = slots.get(materialIndex);
+                 }
+ 
+                 try {
+                     primitives.add(new GltfModel.Primitive(
+                             primitive.getMode(),
+                             slot,
++                            materialIndex,
+                             positions,
+@@ -558,6 +616,7 @@ public final class GltfModelLoader {
+         return new GltfModel(
+                 source,
+                 meshes,
++                gltfMaterials,
+                 slots,
+                 nodes,
+                 scenes,
+@@ -568,6 +627,34 @@ public final class GltfModelLoader {
+     }
+ 
++    private static float[] readBaseColorFactor(double[] source, String materialName) throws IOException {
++        if (source == null) {
++            return new float[]{1.0f, 1.0f, 1.0f, 1.0f};
++        }
++        if (source.length != 4) {
++            throw new IOException("Base color factor for material " + materialName
++                    + " must contain four components");
++        }
++
++        float[] result = new float[4];
++        for (int i = 0; i < result.length; i++) {
++            double value = source[i];
++            if (!Double.isFinite(value) || value < 0.0 || value > 1.0) {
++                throw new IOException("Base color factor for material " + materialName
++                        + " contains an invalid component at index " + i);
++            }
++            result[i] = (float) value;
++        }
++        return result;
++    }
++
++    private static float checkedFloat(double value, String description) throws IOException {
++        if (!Double.isFinite(value) || Math.abs(value) > Float.MAX_VALUE) {
++            throw new IOException("Invalid " + description + ": " + value);
++        }
++        return (float) value;
++    }
++
+     /**
+      * Converts jGLTF's double-precision node components to the float arrays
+      * used by our renderer-independent model.
+      */
