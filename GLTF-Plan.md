@@ -107,6 +107,7 @@ The repository currently contains:
 - `GltfAnimationSampler`
 - `GltfMaterial`
 - `GltfTexture`
+- `SkeletonPose`
 - `YasmModelRenderer`
 - `AnimationController`
 - `MaterialOverrides`
@@ -125,6 +126,18 @@ The renderer and animation controller are currently incomplete.
 - [x] Associate materials with textures by stable index.
 
 GPU upload and filtering application remain part of Phase 6.
+
+### 2.7. Runtime Pose
+
+- [x] Per-instance mutable node transforms.
+- [x] Default pose initialization from model node transforms.
+- [x] Animation sampling through `GltfAnimationSampler`.
+- [x] Local matrix composition from translation, rotation and scale.
+- [x] Topological global transform calculation.
+- [x] Skinning matrix calculation from global joint transforms and inverse bind matrices.
+- [x] Independent pose instances for the same model.
+
+The pose owns only CPU data; GPU skinning remains part of Phase 4.
 
 ---
 
@@ -224,7 +237,7 @@ Implement loading and management of textures referenced by glTF materials.
 ## Phase 3 — Skeletal Pose Evaluation
 
 **Priority:** High  
-**Status:** Not implemented
+**Status:** Implemented (runtime pose and skinning matrices; renderer integration pending)
 
 Implement runtime evaluation of skeletal animation.
 
@@ -232,17 +245,17 @@ The existing loader and sampler provide the necessary animation data. The missin
 
 ### Requirements
 
-- [ ] Create a runtime pose representation.
-- [ ] Initialize the pose from the model's default node transforms.
-- [ ] Sample animation channels at the current animation time.
-- [ ] Apply sampled translation values.
-- [ ] Apply sampled rotation values.
-- [ ] Apply sampled scale values.
-- [ ] Recalculate affected local transforms.
-- [ ] Calculate global node transforms.
-- [ ] Calculate global joint transforms.
-- [ ] Support multiple independent skeleton instances.
-- [ ] Avoid modifying the original immutable `GltfModel` data.
+- [x] Create a runtime pose representation.
+- [x] Initialize the pose from the model's default node transforms.
+- [x] Sample animation channels at the current animation time.
+- [x] Apply sampled translation values.
+- [x] Apply sampled rotation values.
+- [x] Apply sampled scale values.
+- [x] Recalculate affected local transforms.
+- [x] Calculate global node transforms.
+- [x] Calculate global joint transforms.
+- [x] Support multiple independent skeleton instances.
+- [x] Avoid modifying the original immutable `GltfModel` data.
 
 ### Matrix Calculations
 
@@ -261,6 +274,8 @@ The exact matrix conventions and multiplication order must be consistent through
 - Joint global transforms are calculated correctly.
 - The original model data remains unchanged.
 - Multiple instances of the same model can have different poses.
+
+**Implementation note:** `SkeletonPose` stores node translation/rotation/scale, local and global matrices, and per-skin skinning matrices in column-major order. Matrix-transform nodes are treated as fixed local matrices. Animation channels targeting `weights` are ignored because morph targets are out of scope. Rebuilding a pose recomputes all local matrices and propagates global transforms in parent-before-child order; the source `GltfModel` is never modified.
 
 ---
 
@@ -663,6 +678,22 @@ Implemented PNG texture loading and exposed sampler settings.
 - Verified with `gradlew build` and a reflection-based smoke test covering PNG dimensions, data URIs, inline buffer views, external files and path-escape rejection — all passed.
 
 **Not done in this phase:** GPU texture creation, filtering application and upload caching are still Phase 6 work; no Blender-exported model with real PNGs has been tested yet.
+
+### 2026-11-26 — Phase 3: Skeletal Pose Evaluation
+
+Implemented runtime pose evaluation and skinning matrix calculation.
+
+- Added `SkeletonPose`, a mutable per-instance runtime pose that owns node translation/rotation/scale, local matrices, global matrices and per-skin skinning matrices.
+- The pose is initialized from the model's default node transforms; matrix-transform nodes keep their fixed local matrix.
+- Animation channels are sampled through `GltfAnimationSampler`; translation, rotation and scale channels update the pose. Morph `weights` channels are ignored because morph targets are out of scope.
+- Local matrices are composed as `T * R * S` in column-major order.
+- Global transforms are propagated in parent-before-child order, so parent rotation, translation and scale affect children correctly.
+- Skinning matrices are calculated as `globalJointTransform * inverseBindMatrix`.
+- Multiple `SkeletonPose` instances can be created from one model and animated independently; the source `GltfModel` data is never modified.
+- Invalid animation node indices, non-finite times, matrix-node animation and cyclic node hierarchies fail with descriptive exceptions.
+- Verified with `gradlew build` and a hand-built model smoke test covering default pose, hierarchy propagation, rotation, animation sampling, reset, independent instances, matrix nodes, skinning matrices and invalid inputs — all passed.
+
+**Not done in this phase:** skinning matrices are not uploaded to the GPU yet (Phase 4); animation playback timing, looping and cross-fades remain Phase 7 work; no Blender-exported animated model has been tested yet.
 
 ---
 
