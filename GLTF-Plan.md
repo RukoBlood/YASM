@@ -105,6 +105,7 @@ The repository currently contains:
 - `GltfModelLoader`
 - `GltfAccessorDecoder`
 - `GltfAnimationSampler`
+- `GltfMaterial`
 - `YasmModelRenderer`
 - `AnimationController`
 - `MaterialOverrides`
@@ -118,23 +119,23 @@ The renderer and animation controller are currently incomplete.
 ## Phase 1 — Material System
 
 **Priority:** High  
-**Status:** Not implemented
+**Status:** Implemented (parsing complete; renderer integration pending)
 
 Create a material representation suitable for the PS1-style renderer.
 
 ### Requirements
 
-- [ ] Create a `GltfMaterial` data structure.
-- [ ] Read material definitions from glTF.
-- [ ] Read material names.
-- [ ] Read base color texture references.
-- [ ] Read base color factors.
-- [ ] Read alpha mode.
-- [ ] Read alpha cutoff.
-- [ ] Read double-sided setting.
-- [ ] Associate materials with mesh primitives.
-- [ ] Preserve material indices or stable identifiers.
-- [ ] Handle primitives without an explicitly assigned material.
+- [x] Create a `GltfMaterial` data structure.
+- [x] Read material definitions from glTF.
+- [x] Read material names.
+- [x] Read base color texture references.
+- [x] Read base color factors.
+- [x] Read alpha mode.
+- [x] Read alpha cutoff.
+- [x] Read double-sided setting.
+- [x] Associate materials with mesh primitives.
+- [x] Preserve material indices or stable identifiers.
+- [x] Handle primitives without an explicitly assigned material.
 
 ### Supported Material Properties
 
@@ -605,6 +606,28 @@ The YASM glTF module is considered functionally complete when:
 8. The renderer supports the intended PS1-style visual features.
 9. Multiple instances of the same model can maintain independent animation and visibility state.
 10. The implementation works in the target Minecraft and NeoForge environment.
+
+---
+
+## 9. Implementation Log
+
+### 2026-11-26 — Phase 1: Material System
+
+Implemented material parsing and wired it into the immutable model data.
+
+- Added `GltfMaterial` with name, base color factor, base color texture index and texcoord set, alpha mode, alpha cutoff, and double-sided flag.
+- Extended `GltfModel` with a materials list and `Primitive.materialIndex()`; the legacy constructors are preserved. Material indices are validated against the material list.
+- Updated `GltfModelLoader` to read `PbrMaterialModel` data:
+  - base color factor defaults to `1, 1, 1, 1`;
+  - base color texture index defaults to `-1` when absent;
+  - only `TEXCOORD_0` is accepted for the base color texture;
+  - alpha mode defaults to `OPAQUE`, alpha cutoff defaults to `0.5`;
+  - `doubleSided` defaults to `false`.
+- Primitives without a material keep `materialIndex = -1` and the `"default"` slot.
+- Fixed and applied `gltf-phase1-material-system.patch`: the loader hunks had no context lines and stale offsets, so `git apply` rejected them. The patch now applies cleanly.
+- Verified with `gradlew compileJava` — build successful.
+
+**Not done in this phase:** texture bytes are not loaded yet (Phase 2); the renderer does not consume material data yet (Phase 6); no Blender-exported model has been tested yet.
 
 ---
 
