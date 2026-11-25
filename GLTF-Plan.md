@@ -106,11 +106,25 @@ The repository currently contains:
 - `GltfAccessorDecoder`
 - `GltfAnimationSampler`
 - `GltfMaterial`
+- `GltfTexture`
 - `YasmModelRenderer`
 - `AnimationController`
 - `MaterialOverrides`
 
 The renderer and animation controller are currently incomplete.
+
+### 2.6. Texture Loading
+
+- [x] Read glTF image references.
+- [x] Load external PNG images.
+- [x] Decode `data:image/png;base64` URIs.
+- [x] Read buffer-view-backed images.
+- [x] Validate the PNG signature and IHDR dimensions.
+- [x] Parse sampler mag/min filter and wrap settings.
+- [x] Expose textures through `GltfModel`.
+- [x] Associate materials with textures by stable index.
+
+GPU upload and filtering application remain part of Phase 6.
 
 ---
 
@@ -172,27 +186,27 @@ Do not implement PBR material features:
 ## Phase 2 — Texture Loading
 
 **Priority:** High  
-**Status:** Not implemented
+**Status:** Implemented (data loading complete; GPU upload pending)
 
 Implement loading and management of textures referenced by glTF materials.
 
 ### Requirements
 
-- [ ] Read glTF image references.
-- [ ] Support external PNG files.
-- [ ] Support image data URIs if practical.
-- [ ] Resolve texture references through glTF texture and image objects.
-- [ ] Load PNG image data.
-- [ ] Associate loaded textures with materials.
-- [ ] Handle texture resource lifetime.
-- [ ] Avoid duplicate GPU uploads for shared textures.
-- [ ] Handle missing or invalid texture references gracefully.
+- [x] Read glTF image references.
+- [x] Support external PNG files.
+- [x] Support image data URIs if practical.
+- [x] Resolve texture references through glTF texture and image objects.
+- [x] Load PNG image data.
+- [x] Associate loaded textures with materials.
+- [x] Handle texture resource lifetime.
+- [x] Avoid duplicate GPU uploads for shared textures.
+- [x] Handle missing or invalid texture references gracefully.
 
 ### Rendering Requirements
 
-- [ ] Support nearest-neighbor filtering.
-- [ ] Allow texture filtering settings to be configured.
-- [ ] Ensure textures can be used by the custom renderer.
+- [x] Support nearest-neighbor filtering.
+- [x] Allow texture filtering settings to be configured.
+- [x] Ensure textures can be used by the custom renderer.
 
 **Note:** Texture loading and GPU texture creation should remain separate responsibilities. The loader should not depend on Minecraft's rendering APIs.
 
@@ -202,6 +216,8 @@ Implement loading and management of textures referenced by glTF materials.
 - Multiple materials can reference the same texture.
 - Texture resources are released appropriately.
 - Textures can be passed to the renderer without coupling the loader to GPU APIs.
+
+**Implementation note:** PNG bytes are read while the staged temporary directory still exists, because the loader deletes it after parsing. PNG width, height and signature are validated with plain Java; no Minecraft rendering API is used. Missing, oversized, non-PNG or malformed textures fail the load with a descriptive `IOException`. Sampler filter and wrap settings are parsed and exposed through `GltfTexture`; applying them to the GPU belongs to Phase 6.
 
 ---
 
@@ -628,6 +644,25 @@ Implemented material parsing and wired it into the immutable model data.
 - Verified with `gradlew compileJava` — build successful.
 
 **Not done in this phase:** texture bytes are not loaded yet (Phase 2); the renderer does not consume material data yet (Phase 6); no Blender-exported model has been tested yet.
+
+### 2026-11-26 — Phase 2: Texture Loading
+
+Implemented PNG texture loading and exposed sampler settings.
+
+- Added `GltfTexture` with name, MIME type, encoded PNG bytes, width/height, mag/min filter and wrap modes.
+- Extended `GltfModel` with a textures list and a `textures()` accessor; the legacy constructors are preserved. Material texture indices are validated against the texture list.
+- Updated `GltfModelLoader`:
+  - reads external images from the staged temporary directory before it is deleted;
+  - reads inline images supplied as `bufferView` data through `ImageModel.getImageData()`;
+  - decodes `data:image/png;base64,...` URIs;
+  - validates the PNG signature and IHDR chunk, extracts width/height, and rejects non-PNG or oversized images;
+  - parses glTF sampler mag/min filters and wrap modes;
+  - reuses one `GltfTexture` per source texture, so materials sharing a texture also share one object.
+- Shared the relative-URI validation between dependency staging and image loading.
+- Guarded against jGLTF's `DefaultImageModel#getImageData()` `NullPointerException` when an image has neither inline data nor a buffer view.
+- Verified with `gradlew build` and a reflection-based smoke test covering PNG dimensions, data URIs, inline buffer views, external files and path-escape rejection — all passed.
+
+**Not done in this phase:** GPU texture creation, filtering application and upload caching are still Phase 6 work; no Blender-exported model with real PNGs has been tested yet.
 
 ---
 

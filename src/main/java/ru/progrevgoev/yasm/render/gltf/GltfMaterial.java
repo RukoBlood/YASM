@@ -4,8 +4,8 @@ import java.util.Objects;
 
 /**
  * Immutable renderer-independent representation of the supported glTF material properties.
- * Texture indices refer to the source glTF texture array and are resolved by the texture-loading
- * stage. A value of -1 means that no base color texture is assigned.
+ * Texture indices refer to {@link GltfModel#textures()} and preserve the source glTF texture
+ * order. A value of -1 means that no base color texture is assigned.
  */
 public final class GltfMaterial {
     public enum AlphaMode {

@@ -9,12 +9,17 @@ import net.minecraft.server.packs.resources.ResourceManager;
 
 import java.io.*;
 import java.net.URI;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
 
 /** Loads JSON glTF 2.0 resources and stages their relative external dependencies for jGLTF. */
 public final class GltfModelLoader {
+    private static final int MAX_IMAGE_BYTES = 64 * 1024 * 1024;
+    private static final int MAX_BASE64_LENGTH = ((MAX_IMAGE_BYTES + 2) / 3) * 4;
+    private static final int MAX_TEXTURE_DIMENSION = 16384;
+
     private final ResourceManager resources;
 
     public GltfModelLoader(ResourceManager resources) {
@@ -40,7 +45,7 @@ public final class GltfModelLoader {
             de.javagl.jgltf.model.GltfModel parsed =
                     new GltfModelReader().read(stagedModel);
 
-            return convert(modelLocation, parsed, readDefaultSceneIndex(json));
+            return convert(modelLocation, parsed, readDefaultSceneIndex(json), temp);
         } catch (JsonParseException | IllegalStateException | ClassCastException e) {
             throw new IOException("Invalid glTF JSON resource " + modelLocation, e);
         } catch (RuntimeException e) {
@@ -95,33 +100,7 @@ public final class GltfModelLoader {
                     continue;
                 }
 
-                URI uri;
-                try {
-                    uri = URI.create(raw);
-                } catch (IllegalArgumentException e) {
-                    throw new IOException("Invalid glTF URI: " + raw, e);
-                }
-
-                if (uri.isAbsolute() || uri.getRawQuery() != null || uri.getRawFragment() != null) {
-                    throw new IOException("Only relative glTF URIs are supported: " + raw);
-                }
-
-                String decoded = uri.getPath();
-                if (decoded == null || decoded.isBlank() || decoded.startsWith("/")
-                        || decoded.contains("\\") || decoded.indexOf('\0') >= 0) {
-                    throw new IOException("Invalid relative glTF URI: " + raw);
-                }
-
-                Path relative;
-                try {
-                    relative = Path.of(decoded).normalize();
-                } catch (InvalidPathException e) {
-                    throw new IOException("Invalid relative glTF URI: " + raw, e);
-                }
-
-                if (relative.isAbsolute() || relative.startsWith("..")) {
-                    throw new IOException("glTF URI escapes model directory: " + raw);
-                }
+                Path relative = parseRelativeUri(raw, "glTF");
 
                 String key = relative.toString().replace('\\', '/');
                 if (!copied.add(key)) {
@@ -156,17 +135,21 @@ public final class GltfModelLoader {
 
     private GltfModel convert(ResourceLocation source,
                               de.javagl.jgltf.model.GltfModel parsed,
-                              int defaultSceneIndex) throws IOException {
+                              int defaultSceneIndex,
+                              Path stagedRoot) throws IOException {
 
         List<MaterialModel> sourceMaterials = parsed.getMaterialModels();
         List<TextureModel> sourceTextures = parsed.getTextureModels();
         IdentityHashMap<MaterialModel, Integer> materialIndices = new IdentityHashMap<>();
         IdentityHashMap<TextureModel, Integer> textureIndices = new IdentityHashMap<>();
+        List<GltfTexture> textures = new ArrayList<>(sourceTextures.size());
         List<GltfMaterial> gltfMaterials = new ArrayList<>(sourceMaterials.size());
         List<String> slots = new ArrayList<>(sourceMaterials.size());
 
         for (int i = 0; i < sourceTextures.size(); i++) {
-            textureIndices.put(sourceTextures.get(i), i);
+            TextureModel sourceTexture = sourceTextures.get(i);
+            textureIndices.put(sourceTexture, i);
+            textures.add(loadTexture(sourceTexture, i, stagedRoot));
         }
 
         for (int i = 0; i < sourceMaterials.size(); i++) {
@@ -617,6 +600,7 @@ public final class GltfModelLoader {
                 source,
                 meshes,
                 gltfMaterials,
+                textures,
                 slots,
                 nodes,
                 scenes,
@@ -652,6 +636,253 @@ public final class GltfModelLoader {
             throw new IOException("Invalid " + description + ": " + value);
         }
         return (float) value;
+    }
+
+    private static GltfTexture loadTexture(TextureModel texture, int index, Path stagedRoot)
+            throws IOException {
+        ImageModel image = texture.getImageModel();
+        if (image == null) {
+            throw new IOException("Texture " + index + " does not reference an image");
+        }
+
+        String name = texture.getName();
+        if (name == null || name.isBlank()) {
+            name = image.getName();
+        }
+        if (name == null || name.isBlank()) {
+            name = "texture_" + index;
+        }
+
+        String description = "texture " + index + " (" + name + ")";
+        String mimeType = image.getMimeType();
+        if (mimeType == null || mimeType.isBlank()) {
+            mimeType = "image/png";
+        }
+        if (!"image/png".equalsIgnoreCase(mimeType)) {
+            throw new IOException(description + " uses unsupported mime type " + mimeType
+                    + "; only image/png is supported");
+        }
+
+        byte[] data = readImageData(image, stagedRoot, description);
+        int[] dimensions = readPngDimensions(data, description);
+
+        try {
+            return new GltfTexture(
+                    name,
+                    mimeType,
+                    data,
+                    dimensions[0],
+                    dimensions[1],
+                    readMagFilter(texture.getMagFilter(), description),
+                    readMinFilter(texture.getMinFilter(), description),
+                    readWrapMode(texture.getWrapS(), description),
+                    readWrapMode(texture.getWrapT(), description)
+            );
+        } catch (IllegalArgumentException e) {
+            throw new IOException("Invalid glTF " + description + ": " + e.getMessage(), e);
+        }
+    }
+
+    private static byte[] readImageData(ImageModel image, Path stagedRoot, String description)
+            throws IOException {
+        // DefaultImageModel#getImageData() throws an NPE when neither inline data nor a
+        // buffer view is present, so only call it for buffer-view-backed images.
+        ByteBuffer inline = image.getBufferViewModel() == null ? null : image.getImageData();
+        if (inline != null) {
+            byte[] data = copyBuffer(inline, description);
+            if (data.length == 0) {
+                throw new IOException(description + " has empty image data");
+            }
+            return data;
+        }
+
+        String uri = image.getUri();
+        if (uri == null || uri.isBlank()) {
+            throw new IOException(description + " has no image URI or image data");
+        }
+        if (uri.startsWith("data:")) {
+            return decodeDataUri(uri, description);
+        }
+
+        Path relative = parseRelativeUri(uri, description);
+        Path file = stagedRoot.resolve(relative).normalize();
+        if (!file.startsWith(stagedRoot)) {
+            throw new IOException(description + " resolves outside the staged model directory");
+        }
+        if (!Files.isRegularFile(file)) {
+            throw new IOException(description + " image file is missing: " + uri);
+        }
+
+        long size = Files.size(file);
+        if (size <= 0) {
+            throw new IOException(description + " image file is empty: " + uri);
+        }
+        if (size > MAX_IMAGE_BYTES) {
+            throw new IOException(description + " image file exceeds " + MAX_IMAGE_BYTES + " bytes: " + uri);
+        }
+        return Files.readAllBytes(file);
+    }
+
+    private static byte[] copyBuffer(ByteBuffer buffer, String description) throws IOException {
+        ByteBuffer copy = buffer.duplicate();
+        copy.position(0);
+        int length = copy.limit();
+        if (length <= 0) {
+            return new byte[0];
+        }
+        if (length > MAX_IMAGE_BYTES) {
+            throw new IOException(description + " image data exceeds " + MAX_IMAGE_BYTES + " bytes");
+        }
+        byte[] data = new byte[length];
+        copy.get(data);
+        return data;
+    }
+
+    private static byte[] decodeDataUri(String uri, String description) throws IOException {
+        int comma = uri.indexOf(',');
+        if (comma < 0) {
+            throw new IOException(description + " has an invalid data URI");
+        }
+
+        String metadata = uri.substring("data:".length(), comma);
+        String payload = uri.substring(comma + 1);
+
+        int semicolon = metadata.indexOf(';');
+        String mediaType = semicolon < 0 ? metadata : metadata.substring(0, semicolon);
+        if (!mediaType.isEmpty() && !"image/png".equalsIgnoreCase(mediaType)) {
+            throw new IOException(description + " uses unsupported data URI media type "
+                    + mediaType + "; only image/png is supported");
+        }
+        if (semicolon < 0 || !"base64".equalsIgnoreCase(metadata.substring(semicolon + 1))) {
+            throw new IOException(description + " data URI must use base64 encoding");
+        }
+        if (payload.length() > MAX_BASE64_LENGTH) {
+            throw new IOException(description + " data URI is too large");
+        }
+
+        byte[] data;
+        try {
+            data = Base64.getDecoder().decode(payload);
+        } catch (IllegalArgumentException e) {
+            throw new IOException(description + " has invalid base64 image data", e);
+        }
+        if (data.length == 0) {
+            throw new IOException(description + " data URI is empty");
+        }
+        if (data.length > MAX_IMAGE_BYTES) {
+            throw new IOException(description + " image data exceeds " + MAX_IMAGE_BYTES + " bytes");
+        }
+        return data;
+    }
+
+    private static int[] readPngDimensions(byte[] data, String description) throws IOException {
+        // 8-byte signature + 4-byte chunk length + 4-byte chunk type + 13-byte IHDR + 4-byte CRC.
+        if (data.length < 33) {
+            throw new IOException(description + " is not a valid PNG: file is too short");
+        }
+
+        int[] signature = {137, 80, 78, 71, 13, 10, 26, 10};
+        for (int i = 0; i < signature.length; i++) {
+            if ((data[i] & 0xFF) != signature[i]) {
+                throw new IOException(description + " is not a PNG image");
+            }
+        }
+
+        if (readIntBigEndian(data, 8) != 13
+                || data[12] != 'I' || data[13] != 'H'
+                || data[14] != 'D' || data[15] != 'R') {
+            throw new IOException(description + " has an invalid PNG IHDR chunk");
+        }
+
+        int width = readIntBigEndian(data, 16);
+        int height = readIntBigEndian(data, 20);
+        if (width <= 0 || height <= 0) {
+            throw new IOException(description + " has invalid PNG dimensions " + width + "x" + height);
+        }
+        if (width > MAX_TEXTURE_DIMENSION || height > MAX_TEXTURE_DIMENSION) {
+            throw new IOException(description + " PNG dimensions exceed " + MAX_TEXTURE_DIMENSION
+                    + ": " + width + "x" + height);
+        }
+        return new int[]{width, height};
+    }
+
+    private static int readIntBigEndian(byte[] data, int offset) {
+        return ((data[offset] & 0xFF) << 24)
+                | ((data[offset + 1] & 0xFF) << 16)
+                | ((data[offset + 2] & 0xFF) << 8)
+                | (data[offset + 3] & 0xFF);
+    }
+
+    private static GltfTexture.MagFilter readMagFilter(Integer value, String description)
+            throws IOException {
+        if (value == null) {
+            return null;
+        }
+        return switch (value) {
+            case 9728 -> GltfTexture.MagFilter.NEAREST;
+            case 9729 -> GltfTexture.MagFilter.LINEAR;
+            default -> throw new IOException(description + " has unsupported magFilter " + value);
+        };
+    }
+
+    private static GltfTexture.MinFilter readMinFilter(Integer value, String description)
+            throws IOException {
+        if (value == null) {
+            return null;
+        }
+        return switch (value) {
+            case 9728 -> GltfTexture.MinFilter.NEAREST;
+            case 9729 -> GltfTexture.MinFilter.LINEAR;
+            case 9984 -> GltfTexture.MinFilter.NEAREST_MIPMAP_NEAREST;
+            case 9985 -> GltfTexture.MinFilter.LINEAR_MIPMAP_NEAREST;
+            case 9986 -> GltfTexture.MinFilter.NEAREST_MIPMAP_LINEAR;
+            case 9987 -> GltfTexture.MinFilter.LINEAR_MIPMAP_LINEAR;
+            default -> throw new IOException(description + " has unsupported minFilter " + value);
+        };
+    }
+
+    private static GltfTexture.WrapMode readWrapMode(Integer value, String description)
+            throws IOException {
+        if (value == null) {
+            return GltfTexture.WrapMode.REPEAT;
+        }
+        return switch (value) {
+            case 10497 -> GltfTexture.WrapMode.REPEAT;
+            case 33071 -> GltfTexture.WrapMode.CLAMP_TO_EDGE;
+            case 33648 -> GltfTexture.WrapMode.MIRRORED_REPEAT;
+            default -> throw new IOException(description + " has unsupported wrap mode " + value);
+        };
+    }
+
+    private static Path parseRelativeUri(String raw, String description) throws IOException {
+        URI uri;
+        try {
+            uri = URI.create(raw);
+        } catch (IllegalArgumentException e) {
+            throw new IOException("Invalid " + description + " URI: " + raw, e);
+        }
+
+        if (uri.isAbsolute() || uri.getRawQuery() != null || uri.getRawFragment() != null) {
+            throw new IOException("Only relative " + description + " URIs are supported: " + raw);
+        }
+
+        String decoded = uri.getPath();
+        if (decoded == null || decoded.isBlank() || decoded.startsWith("/")
+                || decoded.contains("\\") || decoded.indexOf('\0') >= 0) {
+            throw new IOException("Invalid relative " + description + " URI: " + raw);
+        }
+
+        Path relative;
+        try {
+            relative = Path.of(decoded).normalize();
+        } catch (InvalidPathException e) {
+            throw new IOException("Invalid relative " + description + " URI: " + raw, e);
+        }
+
+        if (relative.isAbsolute() || relative.startsWith("..")) {
+            throw new IOException(description + " URI escapes model directory: " + raw);
+        }
+        return relative;
     }
 
     /**

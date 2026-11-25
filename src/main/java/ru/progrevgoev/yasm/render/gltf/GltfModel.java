@@ -10,6 +10,7 @@ public final class GltfModel {
     private final ResourceLocation source;
     private final List<Mesh> meshes;
     private final List<GltfMaterial> materials;
+    private final List<GltfTexture> textures;
     private final List<String> materialSlots;
     private final List<Node> nodes;
     private final List<Scene> scenes;
@@ -20,15 +21,25 @@ public final class GltfModel {
     public GltfModel(ResourceLocation source, List<Mesh> meshes, List<String> materialSlots,
                      List<Node> nodes, List<Scene> scenes, List<Skin> skins,
                      List<Animation> animations, int defaultSceneIndex) {
-        this(source, meshes, List.of(), materialSlots, nodes, scenes, skins, animations, defaultSceneIndex);
+        this(source, meshes, List.of(), List.of(), materialSlots, nodes, scenes, skins,
+                animations, defaultSceneIndex);
     }
 
     public GltfModel(ResourceLocation source, List<Mesh> meshes, List<GltfMaterial> materials,
                      List<String> materialSlots, List<Node> nodes, List<Scene> scenes,
                      List<Skin> skins, List<Animation> animations, int defaultSceneIndex) {
+        this(source, meshes, materials, List.of(), materialSlots, nodes, scenes, skins,
+                animations, defaultSceneIndex);
+    }
+
+    public GltfModel(ResourceLocation source, List<Mesh> meshes, List<GltfMaterial> materials,
+                     List<GltfTexture> textures, List<String> materialSlots, List<Node> nodes,
+                     List<Scene> scenes, List<Skin> skins, List<Animation> animations,
+                     int defaultSceneIndex) {
         this.source = Objects.requireNonNull(source, "source");
         this.meshes = List.copyOf(meshes);
         this.materials = List.copyOf(materials);
+        this.textures = List.copyOf(textures);
         this.materialSlots = List.copyOf(materialSlots);
         this.nodes = List.copyOf(nodes);
         this.scenes = List.copyOf(scenes);
@@ -45,12 +56,19 @@ public final class GltfModel {
                 }
             }
         }
+        for (GltfMaterial material : this.materials) {
+            if (material.baseColorTextureIndex() >= this.textures.size()) {
+                throw new IllegalArgumentException(
+                        "Material texture index is outside texture list: " + material.baseColorTextureIndex());
+            }
+        }
         this.defaultSceneIndex = defaultSceneIndex;
     }
 
     public ResourceLocation source() { return source; }
     public List<Mesh> meshes() { return meshes; }
     public List<GltfMaterial> materials() { return materials; }
+    public List<GltfTexture> textures() { return textures; }
     public List<String> materialSlots() { return materialSlots; }
     public List<Node> nodes() { return nodes; }
     public List<Scene> scenes() { return scenes; }
@@ -61,6 +79,7 @@ public final class GltfModel {
     public int nodeCount() { return nodes.size(); }
     public int skinCount() { return skins.size(); }
     public int animationCount() { return animations.size(); }
+    public int textureCount() { return textures.size(); }
     public int primitiveCount() { return meshes.stream().mapToInt(m -> m.primitives().size()).sum(); }
 
     public record Mesh(String name, List<Primitive> primitives) {
@@ -167,8 +186,6 @@ public final class GltfModel {
         public int componentsPerValue() { return componentsPerValue; }
         public int keyframeCount() { return times.length; }
     }
-
-    /** Matrices are 4x4, column-major, and map local node coordinates into parent space. */
 
     /**
      * Matrices are 4x4, column-major, and map local node coordinates into parent space.
