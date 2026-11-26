@@ -406,7 +406,7 @@ Implement the custom renderer responsible for GPU resource management and draw s
 #### PS1-Style Features
 
 - [ ] Nearest-neighbor texture filtering.
-- [ ] Optional affine texture mapping.
+- [ ] Perspective-correct texture coordinate interpolation (no affine texture mapping).
 - [ ] Retro-style rendering configuration.
 - [ ] Separate opaque and transparent rendering passes.
 
@@ -619,7 +619,7 @@ A complete implementation must be tested using Blender-exported models.
 - [ ] Multiple textures.
 - [ ] Transparent materials.
 - [ ] Nearest-neighbor filtering.
-- [ ] Affine texture mapping.
+- [ ] Perspective-correct texture mapping without affine warping.
 
 ---
 
